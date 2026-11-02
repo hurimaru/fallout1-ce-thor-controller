@@ -1,5 +1,7 @@
 #include "plib/gnw/dxinput.h"
 
+#include <cstdlib>
+
 namespace fallout {
 
 static bool dxinput_mouse_init();
@@ -9,6 +11,38 @@ static void dxinput_keyboard_exit();
 
 static int gMouseWheelDeltaX = 0;
 static int gMouseWheelDeltaY = 0;
+
+static SDL_GameController* gGamepad = nullptr;
+static bool gGamepadSubsystemReady = false;
+static float gGamepadRemainderX = 0.0f;
+static float gGamepadRemainderY = 0.0f;
+
+// Opens the first available gamepad, and re-checks if it gets unplugged.
+static void gamepadUpdate()
+{
+    if (!gGamepadSubsystemReady) {
+        gGamepadSubsystemReady = SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0;
+        if (!gGamepadSubsystemReady) {
+            return;
+        }
+    }
+
+    if (gGamepad != nullptr && !SDL_GameControllerGetAttached(gGamepad)) {
+        SDL_GameControllerClose(gGamepad);
+        gGamepad = nullptr;
+    }
+
+    if (gGamepad == nullptr) {
+        for (int i = 0; i < SDL_NumJoysticks(); i++) {
+            if (SDL_IsGameController(i)) {
+                gGamepad = SDL_GameControllerOpen(i);
+                if (gGamepad != nullptr) {
+                    break;
+                }
+            }
+        }
+    }
+}
 
 // 0x4E0400
 bool dxinput_init()
@@ -66,6 +100,45 @@ bool dxinput_get_mouse_state(MouseData* mouseState)
     Uint32 buttons = SDL_GetRelativeMouseState(&(mouseState->x), &(mouseState->y));
     mouseState->buttons[0] = (buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
     mouseState->buttons[1] = (buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
+
+    // Gamepad: left stick moves the cursor, A = left click, B = right click.
+    gamepadUpdate();
+    if (gGamepad != nullptr) {
+        const int kDeadzone = 8000;
+        const float kMaxSpeed = 14.0f;
+
+        int axisX = SDL_GameControllerGetAxis(gGamepad, SDL_CONTROLLER_AXIS_LEFTX);
+        int axisY = SDL_GameControllerGetAxis(gGamepad, SDL_CONTROLLER_AXIS_LEFTY);
+
+        float fx = 0.0f;
+        float fy = 0.0f;
+        if (abs(axisX) > kDeadzone) {
+            fx = (axisX > 0 ? axisX - kDeadzone : axisX + kDeadzone) / (32767.0f - kDeadzone);
+        }
+        if (abs(axisY) > kDeadzone) {
+            fy = (axisY > 0 ? axisY - kDeadzone : axisY + kDeadzone) / (32767.0f - kDeadzone);
+        }
+
+        fx = fx * (fx < 0 ? -fx : fx);
+        fy = fy * (fy < 0 ? -fy : fy);
+
+        gGamepadRemainderX += fx * kMaxSpeed;
+        gGamepadRemainderY += fy * kMaxSpeed;
+        int dx = (int)gGamepadRemainderX;
+        int dy = (int)gGamepadRemainderY;
+        gGamepadRemainderX -= dx;
+        gGamepadRemainderY -= dy;
+
+        mouseState->x += dx;
+        mouseState->y += dy;
+
+        if (SDL_GameControllerGetButton(gGamepad, SDL_CONTROLLER_BUTTON_A)) {
+            mouseState->buttons[0] = 1;
+        }
+        if (SDL_GameControllerGetButton(gGamepad, SDL_CONTROLLER_BUTTON_B)) {
+            mouseState->buttons[1] = 1;
+        }
+    }
     mouseState->wheelX = gMouseWheelDeltaX;
     mouseState->wheelY = gMouseWheelDeltaY;
 
